@@ -397,7 +397,9 @@ function handleProtocolCall(fullProtocolCall?: string) {
 
     const inputURL = fullProtocolCall.replace(appProtocolSurplus, '');
 
-    if (meetingWindow) {
+    // Prefer the launcher: it records the recent list entry and then opens
+    // (or switches) the meeting window via 'open-meeting-window'.
+    if (meetingWindow && !(rendererReady && mainWindow)) {
         meetingWindow.webContents.send('protocol-data-msg', inputURL);
 
         return;
