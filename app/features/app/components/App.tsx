@@ -2,7 +2,7 @@ import React, { Component } from 'react';
 import { connect } from 'react-redux';
 import { Dispatch } from 'redux';
 
-import type { IState } from '../../../types';
+import type { IConference, IState } from '../../../types';
 import config from '../../config';
 import { addRecentListEntry } from '../../recent-list/actions';
 import { setServerURL } from '../../settings/actions';
@@ -10,6 +10,7 @@ import { createConferenceObjectFromURL } from '../../utils';
 import { Welcome } from '../../welcome';
 
 interface IProps {
+    _recentList: IConference[];
     _serverURL?: string;
     dispatch: Dispatch;
 }
@@ -57,6 +58,20 @@ class App extends Component<IProps> {
 
         // send notification to main process
         window.jitsiElectronApp.ipc.send('renderer-ready');
+
+        this._sendRecentMeetings();
+    }
+
+    /**
+     * Implements React's {@link Component#componentDidUpdate()}.
+     *
+     * @param {IProps} prevProps - The previous props.
+     * @returns {void}
+     */
+    componentDidUpdate(prevProps: IProps) {
+        if (prevProps._recentList !== this.props._recentList) {
+            this._sendRecentMeetings();
+        }
     }
 
     /**
@@ -66,6 +81,23 @@ class App extends Component<IProps> {
      */
     componentWillUnmount() {
         this._listeners.forEach(remove => remove());
+    }
+
+    /**
+     * Sends the recent list to the main process so it can populate the macOS
+     * Dock menu and the Windows Jump List.
+     *
+     * @returns {void}
+     */
+    _sendRecentMeetings() {
+        const recentMeetings = this.props._recentList.map(({ room, serverURL }) => {
+            return {
+                room,
+                serverURL
+            };
+        });
+
+        window.jitsiElectronApp.ipc.send('update-recent-meetings', recentMeetings);
     }
 
     /**
@@ -131,6 +163,7 @@ class App extends Component<IProps> {
  */
 function _mapStateToProps(state: IState) {
     return {
+        _recentList: state.recentList.recentList,
         _serverURL: state.settings.serverURL
     };
 }

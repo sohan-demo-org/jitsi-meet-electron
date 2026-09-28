@@ -26,6 +26,7 @@ import * as URL from 'url';
 import config from './app/features/config';
 import { openExternalLink } from './app/features/utils/openExternalLink';
 import { t } from './app/i18n/main';
+import type { IConference } from './app/types';
 import pkgJson from './package.json';
 
 // This file is bundled to ./build/main.js, so under esbuild __dirname is the
@@ -127,6 +128,18 @@ let webrtcInternalsWindow: BrowserWindow | null = null;
 const appProtocolSurplus = `${config.appProtocolPrefix}://`;
 let rendererReady = false;
 let protocolDataForFrontApp: string | null = null;
+
+/**
+ * Maximum number of recent meetings shown in the macOS Dock menu and the
+ * Windows Jump List.
+ */
+const MAX_RECENT_MEETINGS = 5;
+
+/**
+ * The script Electron was started with in development (e.g. build/main.js).
+ * Captured up front because process.argv is mutated by protocol handling.
+ */
+const devEntryScript = isDev && process.argv[1] ? path.resolve(process.argv[1]) : null;
 
 
 /**
@@ -390,7 +403,9 @@ function handleProtocolCall(fullProtocolCall?: string) {
 
     const inputURL = fullProtocolCall.replace(appProtocolSurplus, '');
 
-    if (meetingWindow) {
+    // Prefer the launcher: it records the recent list entry and then opens
+    // (or switches) the meeting window via 'open-meeting-window'.
+    if (meetingWindow && !(rendererReady && mainWindow)) {
         meetingWindow.webContents.send('protocol-data-msg', inputURL);
 
         return;
@@ -406,6 +421,92 @@ function handleProtocolCall(fullProtocolCall?: string) {
         mainWindow
             .webContents
             .send('protocol-data-msg', inputURL);
+    }
+}
+
+/**
+ * Builds the deeplink that opens the given conference, e.g.
+ * jitsi-meet://meet.jit.si/myroom.
+ *
+ * @param {IConference} conference - The conference.
+ * @returns {string}
+ */
+function getConferenceProtocolURL({ room, serverURL }: IConference): string {
+    const server = serverURL.replace(/^https:\/\//, '').replace(/\/+$/, '');
+
+    return `${appProtocolSurplus}${server}/${room}`;
+}
+
+/**
+ * Returns a human readable label for the given conference, e.g.
+ * "myroom (meet.jit.si)".
+ *
+ * @param {IConference} conference - The conference.
+ * @returns {string}
+ */
+function getConferenceLabel({ room, serverURL }: IConference): string {
+    const server = serverURL.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+
+    return `${room} (${server})`;
+}
+
+/**
+ * Updates the "Recent meetings" entries of the macOS Dock menu and the Windows
+ * Jump List.
+ *
+ * @param {IConference[]} recentMeetings - The most recent meetings, newest first.
+ * @returns {void}
+ */
+function updateRecentMeetingsMenus(recentMeetings: IConference[]) {
+    const label = t('recentMeetings');
+
+    if (process.platform === 'darwin') {
+        const submenu: Electron.MenuItemConstructorOptions[] = recentMeetings.length
+            ? recentMeetings.map(conference => {
+                return {
+                    label: getConferenceLabel(conference),
+                    click: () => handleProtocolCall(getConferenceProtocolURL(conference))
+                };
+            })
+            : [ {
+                label: t('noRecentMeetings'),
+                enabled: false
+            } ];
+
+        app.dock?.setMenu(Menu.buildFromTemplate([ {
+            label,
+            submenu
+        } ]));
+    } else if (process.platform === 'win32') {
+        // Jump List tasks are launched as new processes, so the deeplink
+        // reaches the running instance through 'second-instance'. Entries that
+        // could break out of the quoted argument are skipped.
+        const appArg = devEntryScript ? `"${devEntryScript}" ` : '';
+        const items: Electron.JumpListItem[] = recentMeetings
+            .filter(conference => !getConferenceProtocolURL(conference).includes('"'))
+            .map(conference => {
+                const url = getConferenceProtocolURL(conference);
+
+                return {
+                    type: 'task',
+                    title: getConferenceLabel(conference),
+                    description: `${conference.serverURL}/${conference.room}`,
+                    program: process.execPath,
+                    args: `${appArg}"${url}"`,
+                    iconPath: process.execPath,
+                    iconIndex: 0
+                };
+            });
+
+        const result = app.setJumpList(items.length ? [ {
+            type: 'custom',
+            name: label,
+            items
+        } ] : null);
+
+        if (result !== 'ok') {
+            console.warn(`Failed to update the Jump List: ${result}`);
+        }
     }
 }
 
@@ -519,6 +620,32 @@ ipcMain.on('renderer-ready', event => {
     }
 
     // Meeting window is ready.
+});
+
+/**
+ * Keeps the macOS Dock menu and Windows Jump List in sync with the launcher's
+ * recent list.
+ */
+ipcMain.on('update-recent-meetings', (event, recentList: unknown) => {
+    if (!mainWindow || event.sender.id !== mainWindow.webContents.id || !Array.isArray(recentList)) {
+        return;
+    }
+
+    const recentMeetings = recentList
+        .filter((conference): conference is IConference =>
+            typeof conference?.room === 'string'
+                && conference.room !== ''
+                && typeof conference.serverURL === 'string'
+                && conference.serverURL !== '')
+        .slice(0, MAX_RECENT_MEETINGS)
+        .map(({ room, serverURL }) => {
+            return {
+                room,
+                serverURL
+            };
+        });
+
+    updateRecentMeetingsMenus(recentMeetings);
 });
 
 /**
