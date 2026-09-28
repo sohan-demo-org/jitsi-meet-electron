@@ -135,6 +135,12 @@ let protocolDataForFrontApp: string | null = null;
  */
 const MAX_RECENT_MEETINGS = 5;
 
+/**
+ * The script Electron was started with in development (e.g. build/main.js).
+ * Captured up front because process.argv is mutated by protocol handling.
+ */
+const devEntryScript = isDev && process.argv[1] ? path.resolve(process.argv[1]) : null;
+
 
 /**
  * Sets the application menu. It is hidden on all platforms except macOS because
@@ -475,7 +481,7 @@ function updateRecentMeetingsMenus(recentMeetings: IConference[]) {
         // Jump List tasks are launched as new processes, so the deeplink
         // reaches the running instance through 'second-instance'. Entries that
         // could break out of the quoted argument are skipped.
-        const appArg = isDev ? `"${path.resolve(process.argv[1])}" ` : '';
+        const appArg = devEntryScript ? `"${devEntryScript}" ` : '';
         const items: Electron.JumpListItem[] = recentMeetings
             .filter(conference => !getConferenceProtocolURL(conference).includes('"'))
             .map(conference => {
